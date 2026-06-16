@@ -319,7 +319,8 @@ def init_db():
                     id INTEGER PRIMARY KEY,
                     name TEXT,
                     category TEXT,
-                    measureUnitName TEXT
+                    measureUnitName TEXT,
+                    lastUpdate TEXT
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS data (
                     unit_id TEXT,
@@ -331,6 +332,28 @@ def init_db():
                     FOREIGN KEY (unit_id) REFERENCES units(id),
                     FOREIGN KEY (variable_id) REFERENCES variables(id)
                 )''')
+
+    # Indexes
+    c.execute("CREATE INDEX IF NOT EXISTS idx_units_name ON units(name)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_variables_category ON variables(category)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_data_variable ON data(variable_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_data_unit ON data(unit_id)")
+
+    # View for easier data viewing
+    c.execute('''CREATE VIEW IF NOT EXISTS view_full_data AS
+                 SELECT
+                    d.year,
+                    u.id as unit_id,
+                    u.name as unit_name,
+                    v.id as variable_id,
+                    v.name as variable_name,
+                    d.value,
+                    v.measureUnitName as unit,
+                    v.category
+                 FROM data d
+                 JOIN units u ON d.unit_id = u.id
+                 JOIN variables v ON d.variable_id = v.id''')
+
     conn.commit()
     return conn
 
@@ -394,10 +417,10 @@ def save_units(conn, units, level):
 def fetch_variable_metadata(var_id):
     return api_get(f"variables/{var_id}")
 
-def save_variable(conn, var_id, name, category, measureUnitName):
+def save_variable(conn, var_id, name, category, measureUnitName, lastUpdate=None):
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO variables (id, name, category, measureUnitName) VALUES (?, ?, ?, ?)",
-              (var_id, name, category, measureUnitName))
+    c.execute("INSERT OR REPLACE INTO variables (id, name, category, measureUnitName, lastUpdate) VALUES (?, ?, ?, ?, ?)",
+              (var_id, name, category, measureUnitName, lastUpdate))
     conn.commit()
 
 def fetch_data_by_variable(var_id, level, year_from, year_to):
@@ -479,24 +502,37 @@ def main():
         vars_list = VARIABLES_MAP[category]
         print(f"Category: {category}")
         for var_id, user_name in vars_list:
-            # Check if we already have data for this variable and range
-            if not args.force:
-                c = conn.cursor()
-                c.execute("SELECT COUNT(*) FROM data WHERE variable_id = ? AND year BETWEEN ? AND ?", (var_id, year_from, year_to))
-                if c.fetchone()[0] > 1000: # Heuristic
-                    print(f"Skipping variable {var_id}, data already exists for the requested range.")
-                    continue
+            # 1. Fetch current metadata to check for updates
+            metadata = fetch_variable_metadata(var_id)
+            if not metadata:
+                print(f"Could not fetch metadata for variable {var_id}")
+                continue
 
-            # Check if we already have metadata
-            c.execute("SELECT id FROM variables WHERE id = ?", (var_id,))
-            if not c.fetchone():
-                metadata = fetch_variable_metadata(var_id)
-                if metadata:
-                    save_variable(conn, var_id, metadata.get("n1", "") + " - " + metadata.get("n2", ""), category, metadata.get("measureUnitName", "unknown"))
-                else:
-                    save_variable(conn, var_id, user_name, category, "unknown")
+            api_last_update = metadata.get("lastUpdate")
 
-            # Fetch data for each level
+            # Check if we already have this variable and if it's up to date
+            c = conn.cursor()
+            c.execute("SELECT lastUpdate FROM variables WHERE id = ?", (var_id,))
+            row = c.fetchone()
+
+            if not args.force and row:
+                local_last_update = row[0]
+                if api_last_update and local_last_update == api_last_update:
+                    # Also check if we actually have data (heuristic)
+                    c.execute("SELECT COUNT(*) FROM data WHERE variable_id = ? AND year BETWEEN ? AND ?", (var_id, year_from, year_to))
+                    if c.fetchone()[0] > 1000:
+                        print(f"Skipping variable {var_id}, data is up to date ({local_last_update}).")
+                        continue
+
+            # Update metadata
+            save_variable(conn, var_id,
+                          metadata.get("n1", "") + " - " + metadata.get("n2", ""),
+                          category,
+                          metadata.get("measureUnitName", "unknown"),
+                          api_last_update)
+
+            # 2. Fetch data for each level
+            print(f"Updating data for variable {var_id}...")
             for level in levels:
                 results = fetch_data_by_variable(var_id, level, year_from, year_to)
                 if results:

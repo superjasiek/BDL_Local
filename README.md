@@ -8,11 +8,18 @@ Local mirror for GUS BDL (Bank Danych Lokalnych) data.
 pip install -r requirements.txt
 ```
 
+*Note: PostgreSQL support requires a running PostgreSQL instance and `psycopg2-binary` (included in requirements).*
+
 ## Usage
 
-To fetch and initialize territorial units (Polska, Województwa, Regiony, Powiaty, Gminy):
+To fetch and initialize territorial units (Polska, Województwa, Regiony, Powiaty, Gminy) using SQLite:
 ```bash
 python3 bdl_mirror.py --units-only
+```
+
+To use PostgreSQL:
+```bash
+python3 bdl_mirror.py --db-type postgres --pg-dsn "dbname=bdl user=postgres password=secret host=localhost" --units-only
 ```
 
 To fetch data for a specific category (e.g., "Struktura demograficzna"):
@@ -43,7 +50,7 @@ The script is designed to respect the GUS BDL API rate limits.
 
 You can provide up to 3 API keys using the `--api-keys` argument. The script will automatically switch to the next key if a rate limit (HTTP 429) is encountered.
 
-Example with API keys:
+Example with API keys and PostgreSQL:
 ```bash
-python3 bdl_mirror.py --category "Struktura demograficzna" --api-keys KEY1 KEY2 KEY3
+python3 bdl_mirror.py --db-type postgres --pg-dsn "..." --category "Struktura demograficzna" --api-keys KEY1 KEY2 KEY3
 ```

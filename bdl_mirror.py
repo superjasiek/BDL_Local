@@ -2,6 +2,7 @@ import sqlite3
 import requests
 import time
 import sys
+import os
 
 BASE_URL = "https://bdl.stat.gov.pl/api/v1"
 DB_NAME = "bdl_mirror.db"
@@ -306,56 +307,113 @@ VARIABLES_MAP = {
     ],
 }
 
-def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS units (
-                    id TEXT PRIMARY KEY,
-                    name TEXT,
-                    level INTEGER,
-                    parentId TEXT
-                )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS variables (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT,
-                    category TEXT,
-                    measureUnitName TEXT,
-                    lastUpdate TEXT
-                )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS data (
-                    unit_id TEXT,
-                    variable_id INTEGER,
-                    year INTEGER,
-                    value REAL,
-                    attr_id INTEGER,
-                    PRIMARY KEY (unit_id, variable_id, year),
-                    FOREIGN KEY (unit_id) REFERENCES units(id),
-                    FOREIGN KEY (variable_id) REFERENCES variables(id)
-                )''')
+class Database:
+    def __init__(self, db_type="sqlite", pg_dsn=None):
+        self.db_type = db_type
+        if db_type == "postgres":
+            import psycopg2
+            self.conn = psycopg2.connect(pg_dsn)
+            self.placeholder = "%s"
+        else:
+            self.conn = sqlite3.connect(DB_NAME)
+            self.placeholder = "?"
 
-    # Indexes
-    c.execute("CREATE INDEX IF NOT EXISTS idx_units_name ON units(name)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_variables_category ON variables(category)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_data_variable ON data(variable_id)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_data_unit ON data(unit_id)")
+    def cursor(self):
+        return self.conn.cursor()
 
-    # View for easier data viewing
-    c.execute('''CREATE VIEW IF NOT EXISTS view_full_data AS
-                 SELECT
-                    d.year,
-                    u.id as unit_id,
-                    u.name as unit_name,
-                    v.id as variable_id,
-                    v.name as variable_name,
-                    d.value,
-                    v.measureUnitName as unit,
-                    v.category
-                 FROM data d
-                 JOIN units u ON d.unit_id = u.id
-                 JOIN variables v ON d.variable_id = v.id''')
+    def commit(self):
+        self.conn.commit()
 
-    conn.commit()
-    return conn
+    def close(self):
+        self.conn.close()
+
+    def init_db(self):
+        c = self.cursor()
+        if self.db_type == "sqlite":
+            c.execute('''CREATE TABLE IF NOT EXISTS units (
+                            id TEXT PRIMARY KEY,
+                            name TEXT,
+                            level INTEGER,
+                            parentId TEXT
+                        )''')
+            c.execute('''CREATE TABLE IF NOT EXISTS variables (
+                            id INTEGER PRIMARY KEY,
+                            name TEXT,
+                            category TEXT,
+                            measureUnitName TEXT,
+                            lastUpdate TEXT
+                        )''')
+            c.execute('''CREATE TABLE IF NOT EXISTS data (
+                            unit_id TEXT,
+                            variable_id INTEGER,
+                            year INTEGER,
+                            value REAL,
+                            attr_id INTEGER,
+                            PRIMARY KEY (unit_id, variable_id, year),
+                            FOREIGN KEY (unit_id) REFERENCES units(id),
+                            FOREIGN KEY (variable_id) REFERENCES variables(id)
+                        )''')
+
+            c.execute("CREATE INDEX IF NOT EXISTS idx_units_name ON units(name)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_variables_category ON variables(category)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_data_variable ON data(variable_id)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_data_unit ON data(unit_id)")
+
+            c.execute('''CREATE VIEW IF NOT EXISTS view_full_data AS
+                         SELECT
+                            d.year,
+                            u.id as unit_id,
+                            u.name as unit_name,
+                            v.id as variable_id,
+                            v.name as variable_name,
+                            d.value,
+                            v.measureUnitName as unit,
+                            v.category
+                         FROM data d
+                         JOIN units u ON d.unit_id = u.id
+                         JOIN variables v ON d.variable_id = v.id''')
+        else: # postgres
+            c.execute('''CREATE TABLE IF NOT EXISTS units (
+                            id TEXT PRIMARY KEY,
+                            name TEXT,
+                            level INTEGER,
+                            parentId TEXT
+                        )''')
+            c.execute('''CREATE TABLE IF NOT EXISTS variables (
+                            id INTEGER PRIMARY KEY,
+                            name TEXT,
+                            category TEXT,
+                            measureUnitName TEXT,
+                            lastUpdate TEXT
+                        )''')
+            c.execute('''CREATE TABLE IF NOT EXISTS data (
+                            unit_id TEXT REFERENCES units(id),
+                            variable_id INTEGER REFERENCES variables(id),
+                            year INTEGER,
+                            value REAL,
+                            attr_id INTEGER,
+                            PRIMARY KEY (unit_id, variable_id, year)
+                        )''')
+
+            c.execute("CREATE INDEX IF NOT EXISTS idx_units_name ON units(name)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_variables_category ON variables(category)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_data_variable ON data(variable_id)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_data_unit ON data(unit_id)")
+
+            c.execute('''CREATE OR REPLACE VIEW view_full_data AS
+                         SELECT
+                            d.year,
+                            u.id as unit_id,
+                            u.name as unit_name,
+                            v.id as variable_id,
+                            v.name as variable_name,
+                            d.value,
+                            v.measureUnitName as unit,
+                            v.category
+                         FROM data d
+                         JOIN units u ON d.unit_id = u.id
+                         JOIN variables v ON d.variable_id = v.id''')
+        self.commit()
 
 def api_get(endpoint, params=None, retries_in_round=0):
     global current_key_index
@@ -407,21 +465,32 @@ def fetch_units(level):
         page += 1
     return units
 
-def save_units(conn, units, level):
-    c = conn.cursor()
+def save_units(db, units, level):
+    c = db.cursor()
     for u in units:
-        c.execute("INSERT OR REPLACE INTO units (id, name, level, parentId) VALUES (?, ?, ?, ?)",
-                  (u["id"], u["name"], level, u.get("parentId")))
-    conn.commit()
+        if db.db_type == "sqlite":
+            c.execute("INSERT OR REPLACE INTO units (id, name, level, parentId) VALUES (?, ?, ?, ?)",
+                      (u["id"], u["name"], level, u.get("parentId")))
+        else:
+            c.execute('''INSERT INTO units (id, name, level, parentId) VALUES (%s, %s, %s, %s)
+                         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, level = EXCLUDED.level, parentId = EXCLUDED.parentId''',
+                      (u["id"], u["name"], level, u.get("parentId")))
+    db.commit()
 
 def fetch_variable_metadata(var_id):
     return api_get(f"variables/{var_id}")
 
-def save_variable(conn, var_id, name, category, measureUnitName, lastUpdate=None):
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO variables (id, name, category, measureUnitName, lastUpdate) VALUES (?, ?, ?, ?, ?)",
-              (var_id, name, category, measureUnitName, lastUpdate))
-    conn.commit()
+def save_variable(db, var_id, name, category, measureUnitName, lastUpdate=None):
+    c = db.cursor()
+    if db.db_type == "sqlite":
+        c.execute("INSERT OR REPLACE INTO variables (id, name, category, measureUnitName, lastUpdate) VALUES (?, ?, ?, ?, ?)",
+                  (var_id, name, category, measureUnitName, lastUpdate))
+    else:
+        c.execute('''INSERT INTO variables (id, name, category, measureUnitName, lastUpdate) VALUES (%s, %s, %s, %s, %s)
+                     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, category = EXCLUDED.category,
+                     measureUnitName = EXCLUDED.measureUnitName, lastUpdate = EXCLUDED.lastUpdate''',
+                  (var_id, name, category, measureUnitName, lastUpdate))
+    db.commit()
 
 def fetch_data_by_variable(var_id, level, year_from, year_to):
     print(f"Fetching data for variable {var_id} at level {level} for {year_from}-{year_to}...")
@@ -444,17 +513,22 @@ def fetch_data_by_variable(var_id, level, year_from, year_to):
         page += 1
     return all_results
 
-def save_data(conn, var_id, results):
-    c = conn.cursor()
+def save_data(db, var_id, results):
+    c = db.cursor()
     for res in results:
         unit_id = res["id"]
         for val in res["values"]:
             year = int(val["year"])
             value = val.get("val")
             attr_id = val.get("attrId")
-            c.execute("INSERT OR REPLACE INTO data (unit_id, variable_id, year, value, attr_id) VALUES (?, ?, ?, ?, ?)",
-                      (unit_id, var_id, year, value, attr_id))
-    conn.commit()
+            if db.db_type == "sqlite":
+                c.execute("INSERT OR REPLACE INTO data (unit_id, variable_id, year, value, attr_id) VALUES (?, ?, ?, ?, ?)",
+                          (unit_id, var_id, year, value, attr_id))
+            else:
+                c.execute('''INSERT INTO data (unit_id, variable_id, year, value, attr_id) VALUES (%s, %s, %s, %s, %s)
+                             ON CONFLICT (unit_id, variable_id, year) DO UPDATE SET value = EXCLUDED.value, attr_id = EXCLUDED.attr_id''',
+                          (unit_id, var_id, year, value, attr_id))
+    db.commit()
 
 def main():
     import argparse
@@ -465,13 +539,16 @@ def main():
     parser.add_argument("--year-to", type=int, default=2025, help="End year")
     parser.add_argument("--force", action="store_true", help="Force fetch even if data exists")
     parser.add_argument("--api-keys", nargs="+", help="Up to 3 API keys")
+    parser.add_argument("--db-type", choices=["sqlite", "postgres"], default="sqlite", help="Database type")
+    parser.add_argument("--pg-dsn", help="PostgreSQL DSN (e.g., 'dbname=bdl user=postgres password=secret host=localhost')")
     args = parser.parse_args()
 
     if args.api_keys:
         global API_KEYS
         API_KEYS = args.api_keys[:3]
 
-    conn = init_db()
+    db = Database(db_type=args.db_type, pg_dsn=args.pg_dsn)
+    db.init_db()
 
     # Levels: 0 (Polska), 2 (Województwa), 3 (Regiony), 5 (Powiaty), 6 (Gminy)
     levels = [0, 2, 3, 5, 6]
@@ -479,14 +556,14 @@ def main():
     # 1. Fetch units
     if args.units_only or (not args.category and not args.force):
         # Check if units exist
-        c = conn.cursor()
+        c = db.cursor()
         c.execute("SELECT COUNT(*) FROM units")
         if c.fetchone()[0] == 0 or args.force:
             for level in levels:
                 units = fetch_units(level)
-                save_units(conn, units, level)
+                save_units(db, units, level)
         if args.units_only:
-            conn.close()
+            db.close()
             return
 
     # 2. Fetch variables and data
@@ -511,21 +588,22 @@ def main():
             api_last_update = metadata.get("lastUpdate")
 
             # Check if we already have this variable and if it's up to date
-            c = conn.cursor()
-            c.execute("SELECT lastUpdate FROM variables WHERE id = ?", (var_id,))
+            c = db.cursor()
+            c.execute(f"SELECT lastUpdate FROM variables WHERE id = {db.placeholder}", (var_id,))
             row = c.fetchone()
 
             if not args.force and row:
                 local_last_update = row[0]
                 if api_last_update and local_last_update == api_last_update:
                     # Also check if we actually have data (heuristic)
-                    c.execute("SELECT COUNT(*) FROM data WHERE variable_id = ? AND year BETWEEN ? AND ?", (var_id, year_from, year_to))
+                    c.execute(f"SELECT COUNT(*) FROM data WHERE variable_id = {db.placeholder} AND year BETWEEN {db.placeholder} AND {db.placeholder}",
+                              (var_id, year_from, year_to))
                     if c.fetchone()[0] > 1000:
                         print(f"Skipping variable {var_id}, data is up to date ({local_last_update}).")
                         continue
 
             # Update metadata
-            save_variable(conn, var_id,
+            save_variable(db, var_id,
                           metadata.get("n1", "") + " - " + metadata.get("n2", ""),
                           category,
                           metadata.get("measureUnitName", "unknown"),
@@ -536,11 +614,11 @@ def main():
             for level in levels:
                 results = fetch_data_by_variable(var_id, level, year_from, year_to)
                 if results:
-                    save_data(conn, var_id, results)
+                    save_data(db, var_id, results)
                 else:
                     print(f"No data for variable {var_id} at level {level}")
 
-    conn.close()
+    db.close()
     print("Done!")
 
 if __name__ == "__main__":

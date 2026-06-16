@@ -9,6 +9,7 @@ DB_NAME = "bdl_mirror.db"
 
 API_KEYS = []
 current_key_index = 0
+VERIFY_SSL = True
 
 # Variables provided by the user
 VARIABLES_MAP = {
@@ -417,6 +418,7 @@ class Database:
 
 def api_get(endpoint, params=None, retries_in_round=0):
     global current_key_index
+    global VERIFY_SSL
 
     # Rate limiting:
     # Anonymous: 5 req/s
@@ -431,7 +433,11 @@ def api_get(endpoint, params=None, retries_in_round=0):
         headers["X-ClientId"] = API_KEYS[current_key_index]
 
     try:
-        response = requests.get(url, params=params, headers=headers)
+        if not VERIFY_SSL:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+        response = requests.get(url, params=params, headers=headers, verify=VERIFY_SSL)
         if response.status_code == 429:
             if API_KEYS and retries_in_round < len(API_KEYS):
                 old_key = API_KEYS[current_key_index]
@@ -541,7 +547,12 @@ def main():
     parser.add_argument("--api-keys", nargs="+", help="Up to 3 API keys")
     parser.add_argument("--db-type", choices=["sqlite", "postgres"], default="sqlite", help="Database type")
     parser.add_argument("--pg-dsn", help="PostgreSQL DSN (e.g., 'dbname=bdl user=postgres password=secret host=localhost')")
+    parser.add_argument("--no-verify", action="store_true", help="Disable SSL certificate verification")
     args = parser.parse_args()
+
+    if args.no_verify:
+        global VERIFY_SSL
+        VERIFY_SSL = False
 
     if args.api_keys:
         global API_KEYS

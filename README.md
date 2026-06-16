@@ -54,3 +54,19 @@ Example with API keys and PostgreSQL:
 ```bash
 python3 bdl_mirror.py --db-type postgres --pg-dsn "..." --category "Struktura demograficzna" --api-keys KEY1 KEY2 KEY3
 ```
+
+## SSL Certificate Issues (Raspberry Pi etc.)
+
+If you encounter `SSLError` or `certificate verify failed` (common on some older systems like Raspberry Pi), you can bypass SSL verification as a last resort:
+
+```bash
+python3 bdl_mirror.py --units-only --no-verify
+```
+
+**Recommended Fix (better than --no-verify):**
+Update your system's certificate store:
+```bash
+sudo apt-get update
+sudo apt-get install --reinstall ca-certificates
+sudo update-ca-certificates
+```

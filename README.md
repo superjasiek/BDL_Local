@@ -35,6 +35,15 @@ To keep the database updated once a month, you can set up a cron job. For exampl
 0 3 1 * * /usr/bin/python3 /path/to/bdl_mirror.py --category "Struktura demograficzna" --year-from $(date +\%Y) --year-to $(date +\%Y)
 ```
 
-## API Limits
+## API Limits & Multi-Key Support
 
-The script is designed to respect the GUS BDL API rate limits for anonymous users (5 requests/second). If you have an API key, you can modify the script to include it in the headers for higher limits.
+The script is designed to respect the GUS BDL API rate limits.
+- Anonymous: 5 requests/second
+- Registered: 10 requests/second
+
+You can provide up to 3 API keys using the `--api-keys` argument. The script will automatically switch to the next key if a rate limit (HTTP 429) is encountered.
+
+Example with API keys:
+```bash
+python3 bdl_mirror.py --category "Struktura demograficzna" --api-keys KEY1 KEY2 KEY3
+```

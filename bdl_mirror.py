@@ -6,6 +6,9 @@ import sys
 BASE_URL = "https://bdl.stat.gov.pl/api/v1"
 DB_NAME = "bdl_mirror.db"
 
+API_KEYS = []
+current_key_index = 0
+
 # Variables provided by the user
 VARIABLES_MAP = {
     "Struktura demograficzna": [
@@ -331,18 +334,34 @@ def init_db():
     conn.commit()
     return conn
 
-def api_get(endpoint, params=None):
-    # Simple rate limiting for anonymous users
-    # 5 requests per second, 100 per 15 minutes.
-    # To be safe, let's wait a bit between requests.
-    time.sleep(0.2) # 5 requests per second max
+def api_get(endpoint, params=None, retries_in_round=0):
+    global current_key_index
+
+    # Rate limiting:
+    # Anonymous: 5 req/s
+    # Registered: 10 req/s
+    # We use a conservative 0.1s or 0.2s delay.
+    delay = 0.1 if API_KEYS else 0.2
+    time.sleep(delay)
+
     url = f"{BASE_URL}/{endpoint}"
+    headers = {}
+    if API_KEYS:
+        headers["X-ClientId"] = API_KEYS[current_key_index]
+
     try:
-        response = requests.get(url, params=params)
+        response = requests.get(url, params=params, headers=headers)
         if response.status_code == 429:
-            print("Rate limit exceeded. Waiting 60 seconds...")
-            time.sleep(60)
-            return api_get(endpoint, params)
+            if API_KEYS and retries_in_round < len(API_KEYS):
+                old_key = API_KEYS[current_key_index]
+                current_key_index = (current_key_index + 1) % len(API_KEYS)
+                new_key = API_KEYS[current_key_index]
+                print(f"Rate limit exceeded for key {old_key}. Switching to next key.")
+                return api_get(endpoint, params, retries_in_round + 1)
+            else:
+                print("Rate limit exceeded for all keys (or anonymous). Waiting 60 seconds...")
+                time.sleep(60)
+                return api_get(endpoint, params, 0)
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -422,7 +441,12 @@ def main():
     parser.add_argument("--year-from", type=int, default=2014, help="Start year")
     parser.add_argument("--year-to", type=int, default=2025, help="End year")
     parser.add_argument("--force", action="store_true", help="Force fetch even if data exists")
+    parser.add_argument("--api-keys", nargs="+", help="Up to 3 API keys")
     args = parser.parse_args()
+
+    if args.api_keys:
+        global API_KEYS
+        API_KEYS = args.api_keys[:3]
 
     conn = init_db()
 

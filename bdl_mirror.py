@@ -450,8 +450,8 @@ def main():
 
     conn = init_db()
 
-    # Levels: 0 (Polska), 2 (Województwa), 5 (Powiaty), 6 (Gminy)
-    levels = [0, 2, 5, 6]
+    # Levels: 0 (Polska), 2 (Województwa), 3 (Regiony), 5 (Powiaty), 6 (Gminy)
+    levels = [0, 2, 3, 5, 6]
 
     # 1. Fetch units
     if args.units_only or (not args.category and not args.force):

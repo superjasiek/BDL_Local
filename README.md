@@ -10,7 +10,7 @@ pip install -r requirements.txt
 
 ## Usage
 
-To initialize the database and fetch all units (territorial structure):
+To fetch and initialize territorial units (Polska, Województwa, Regiony, Powiaty, Gminy):
 ```bash
 python3 bdl_mirror.py --units-only
 ```

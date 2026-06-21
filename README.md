@@ -1,72 +1,82 @@
-# BDL_Local
+# BaDyL - Bank Danych Lokalnych (Local Mirror)
 
-Local mirror for GUS BDL (Bank Danych Lokalnych) data.
+**BaDyL** to narzędzie do tworzenia i utrzymywania lokalnej kopii (mirrora) danych z Głównego Urzędu Statystycznego (GUS) - Banku Danych Lokalnych. Projekt został stworzony z myślą o wydajnym przeglądaniu, wyszukiwaniu i analizowaniu danych statystycznych bezpośrednio na domowym komputerze lub serwerze, bez opóźnień związanych z API i z szerokimi możliwościami filtrowania.
 
-## Installation
+## Zasada działania
 
+1.  **Mirroring danych**: Skrypt `bdl_mirror.py` łączy się z API GUS BDL i pobiera dane dla zdefiniowanych kategorii i zmiennych.
+2.  **Baza danych**: Podstawowym silnikiem bazy danych jest **PostgreSQL**, który zapewnia wydajność przy dużych zbiorach danych i pełną obsługę interfejsu graficznego. (Opcjonalnie wspierany jest również SQLite dla mniejszych wdrożeń).
+3.  **Wyszukiwanie**: Dzięki lokalnej bazie danych, wyszukiwanie wskaźników i jednostek terytorialnych (JST) jest błyskawiczne i pozwala na zaawansowane filtrowanie, którego nie oferuje standardowy interfejs webowy GUS.
+4.  **Interfejs graficzny (GUI)**: Głównym sposobem interakcji z danymi jest aplikacja oparta na **Streamlit** (`app.py`). Pozwala ona na wygodne przeglądanie danych, tworzenie tabel i eksport do formatów CSV/Excel.
+
+## Wymagania
+
+- Python 3.8+
+- **PostgreSQL** (zalecana i podstawowa baza danych)
+- Biblioteki wymienione w `requirements.txt`
+
+## Instalacja i Konfiguracja
+
+1.  Sklonuj repozytorium.
+2.  Zainstaluj zależności:
+    ```bash
+    pip install -r requirements.txt
+    ```
+3.  **Konfiguracja połączenia**: Przed uruchomieniem należy ustawić parametry połączenia z bazą PostgreSQL (tzw. DSN) w plikach:
+    - `app.py` (zmienna `DSN`)
+    - `update_user_labels.py` (zmienna `DSN`)
+    - Podczas uruchamiania `bdl_mirror.py` parametry podaje się w argumencie `--pg-dsn`.
+
+## Inicjalizacja i pobieranie danych
+
+### 1. Pobranie jednostek terytorialnych
+Na początek należy pobrać strukturę podziału terytorialnego Polski (województwa, powiaty, gminy):
 ```bash
-pip install -r requirements.txt
+python3 bdl_mirror.py --db-type postgres --pg-dsn "Twoj_DSN" --units-only
 ```
 
-*Note: PostgreSQL support requires a running PostgreSQL instance and `psycopg2-binary` (included in requirements).*
-
-## Usage
-
-To fetch and initialize territorial units (Polska, Województwa, Regiony, Powiaty, Gminy) using SQLite:
+### 2. Pobieranie danych tematycznych
+Pobierz dane dla wybranych kategorii:
 ```bash
-python3 bdl_mirror.py --units-only
+python3 bdl_mirror.py --db-type postgres --pg-dsn "Twoj_DSN" --category "Struktura demograficzna"
+```
+*Domyślnie skrypt pobiera dane z lat 2014-2025.*
+
+### 3. Aktualizacja etykiet (Kluczowe dla GUI)
+Aby interfejs graficzny poprawnie wyświetlał nazwy wskaźników, należy uruchomić skrypt aktualizujący etykiety:
+```bash
+python3 update_user_labels.py
 ```
 
-To use PostgreSQL:
+## Obsługa Interfejsu Graficznego (Streamlit)
+
+Za warstwę wizualną projektu odpowiada plik **`app.py`**. Aby go uruchomić:
 ```bash
-python3 bdl_mirror.py --db-type postgres --pg-dsn "dbname=bdl user=postgres password=secret host=localhost" --units-only
+streamlit run app.py
 ```
+Po uruchomieniu interfejs będzie dostępny pod adresem `http://localhost:8501`.
 
-To fetch data for a specific category (e.g., "Struktura demograficzna"):
-```bash
-python3 bdl_mirror.py --category "Struktura demograficzna"
-```
+## Automatyzacja (Aktualizacje raz w miesiącu)
 
-To fetch data for a specific year range:
-```bash
-python3 bdl_mirror.py --category "Struktura demograficzna" --year-from 2022 --year-to 2022
-```
-
-Available categories are defined in `bdl_mirror.py` in the `VARIABLES_MAP` dictionary.
-
-## Monthly Updates
-
-To keep the database updated once a month, you can set up a cron job. For example, to update the population data on the 1st of every month at 3:00 AM:
+Dane w BDL są aktualizowane okresowo. Zaleca się uruchamianie synchronizacji raz w miesiącu za pomocą `cron`:
 
 ```bash
-0 3 1 * * /usr/bin/python3 /path/to/bdl_mirror.py --category "Struktura demograficzna" --year-from $(date +\%Y) --year-to $(date +\%Y)
+# Dodaj wpis aktualizujący dane 1-go dnia każdego miesiąca o 3:00 rano
+0 3 1 * * cd /sciezka/do/projektu && /usr/bin/python3 bdl_mirror.py --db-type postgres --pg-dsn "Twoj_DSN" --year-from $(date +\%Y)
 ```
 
-## API Limits & Multi-Key Support
+## Udostępnianie przez Cloudflare Tunnel
 
-The script is designed to respect the GUS BDL API rate limits.
-- Anonymous: 5 requests/second
-- Registered: 10 requests/second
+Aby bezpiecznie wystawić interfejs BaDyLa do internetu:
 
-You can provide up to 3 API keys using the `--api-keys` argument. The script will automatically switch to the next key if a rate limit (HTTP 429) is encountered.
+1.  **Zaloguj się**: `cloudflared tunnel login`
+2.  **Utwórz tunel**: `cloudflared tunnel create badyl-tunnel`
+3.  **Skonfiguruj routing**: `cloudflared tunnel route dns badyl-tunnel badyl.twojadomena.pl`
+4.  **Uruchom tunel** (przekierowanie na port Streamlit):
+    ```bash
+    cloudflared tunnel run --url http://localhost:8501 badyl-tunnel
+    ```
 
-Example with API keys and PostgreSQL:
-```bash
-python3 bdl_mirror.py --db-type postgres --pg-dsn "..." --category "Struktura demograficzna" --api-keys KEY1 KEY2 KEY3
-```
-
-## SSL Certificate Issues (Raspberry Pi etc.)
-
-If you encounter `SSLError` or `certificate verify failed` (common on some older systems like Raspberry Pi), you can bypass SSL verification as a last resort:
-
-```bash
-python3 bdl_mirror.py --units-only --no-verify
-```
-
-**Recommended Fix (better than --no-verify):**
-Update your system's certificate store:
-```bash
-sudo apt-get update
-sudo apt-get install --reinstall ca-certificates
-sudo update-ca-certificates
-```
+## Uwagi dot. API GUS
+- Skrypt obsługuje rotację kluczy API (do 3 kluczy). Podaj je za pomocą `--api-keys KLUCZ1 KLUCZ2`.
+- W przypadku problemów z certyfikatami SSL na starszych systemach (np. Raspberry Pi), użyj flagi `--no-verify`.

@@ -1,72 +1,100 @@
-# BDL_Local
+# BaDyL - Bank Danych Lokalnych (Local Mirror)
 
-Local mirror for GUS BDL (Bank Danych Lokalnych) data.
+**BaDyL** to narzędzie do tworzenia i utrzymywania lokalnej kopii (mirrora) danych z Głównego Urzędu Statystycznego (GUS) - Banku Danych Lokalnych. Projekt został stworzony z myślą o wydajnym przeglądaniu, wyszukiwaniu i analizowaniu danych statystycznych bezpośrednio na domowym komputerze lub serwerze, bez opóźnień związanych z API i z szerokimi możliwościami filtrowania.
 
-## Installation
+## Zasada działania
 
-```bash
-pip install -r requirements.txt
-```
+1.  **Mirroring danych**: Skrypt `bdl_mirror.py` łączy się z API GUS BDL i pobiera dane dla zdefiniowanych kategorii i zmiennych.
+2.  **Efektywność**: Dane są przechowywane lokalnie w bazie SQLite (domyślnie) lub PostgreSQL. Skrypt sprawdza znacznik `lastUpdate` dla każdej zmiennej – jeśli dane w API nie uległy zmianie od ostatniego pobrania, proces jest pomijany, co oszczędza transfer i czas.
+3.  **Wyszukiwanie**: Dzięki lokalnej bazie danych, wyszukiwanie wskaźników i jednostek terytorialnych (JST) jest błyskawiczne i pozwala na zaawansowane filtrowanie, którego nie oferuje standardowy interfejs webowy GUS.
+4.  **Interfejs użytkownika**: Aplikacja `app.py` zbudowana w Streamlit pozwala na wygodne przeglądanie danych, tworzenie tabel i eksport do formatów CSV/Excel.
 
-*Note: PostgreSQL support requires a running PostgreSQL instance and `psycopg2-binary` (included in requirements).*
+## Wymagania
 
-## Usage
+- Python 3.8+
+- Biblioteki wymienione w `requirements.txt`
+- (Opcjonalnie) Baza danych PostgreSQL
 
-To fetch and initialize territorial units (Polska, Województwa, Regiony, Powiaty, Gminy) using SQLite:
+## Instalacja
+
+1.  Sklonuj repozytorium.
+2.  Zainstaluj zależności:
+    ```bash
+    pip install -r requirements.txt
+    ```
+3.  *(Opcjonalnie)* Skonfiguruj bazę PostgreSQL. Jeśli wolisz SQLite, baza `bdl_mirror.db` zostanie utworzona automatycznie.
+
+## Inicjalizacja i pobieranie danych
+
+### 1. Pobranie jednostek terytorialnych
+Na początek należy pobrać strukturę podziału terytorialnego Polski (województwa, powiaty, gminy):
 ```bash
 python3 bdl_mirror.py --units-only
 ```
 
-To use PostgreSQL:
-```bash
-python3 bdl_mirror.py --db-type postgres --pg-dsn "dbname=bdl user=postgres password=secret host=localhost" --units-only
-```
-
-To fetch data for a specific category (e.g., "Struktura demograficzna"):
+### 2. Pobieranie danych tematycznych
+Możesz pobrać wszystkie zdefiniowane kategorie lub wybrać konkretną (np. "Struktura demograficzna"):
 ```bash
 python3 bdl_mirror.py --category "Struktura demograficzna"
 ```
+*Domyślnie skrypt pobiera dane z lat 2014-2025.*
 
-To fetch data for a specific year range:
+### 3. Aktualizacja etykiet użytkownika (dla PostgreSQL)
+Jeśli korzystasz z PostgreSQL i interfejsu Streamlit, uruchom:
 ```bash
-python3 bdl_mirror.py --category "Struktura demograficzna" --year-from 2022 --year-to 2022
+python update_user_labels.py
 ```
+Doda to do bazy czytelne nazwy zmiennych zdefiniowane w konfiguracji skryptu.
 
-Available categories are defined in `bdl_mirror.py` in the `VARIABLES_MAP` dictionary.
+## Interfejs WWW (Streamlit)
 
-## Monthly Updates
-
-To keep the database updated once a month, you can set up a cron job. For example, to update the population data on the 1st of every month at 3:00 AM:
-
+Aby uruchomić aplikację do przeglądania danych:
 ```bash
-0 3 1 * * /usr/bin/python3 /path/to/bdl_mirror.py --category "Struktura demograficzna" --year-from $(date +\%Y) --year-to $(date +\%Y)
+streamlit run app.py
 ```
+Interfejs będzie dostępny domyślnie pod adresem `http://localhost:8501`.
 
-## API Limits & Multi-Key Support
+## Automatyzacja (Aktualizacje raz w miesiącu)
 
-The script is designed to respect the GUS BDL API rate limits.
-- Anonymous: 5 requests/second
-- Registered: 10 requests/second
-
-You can provide up to 3 API keys using the `--api-keys` argument. The script will automatically switch to the next key if a rate limit (HTTP 429) is encountered.
-
-Example with API keys and PostgreSQL:
-```bash
-python3 bdl_mirror.py --db-type postgres --pg-dsn "..." --category "Struktura demograficzna" --api-keys KEY1 KEY2 KEY3
-```
-
-## SSL Certificate Issues (Raspberry Pi etc.)
-
-If you encounter `SSLError` or `certificate verify failed` (common on some older systems like Raspberry Pi), you can bypass SSL verification as a last resort:
+Dane w BDL są aktualizowane okresowo. Zaleca się uruchamianie skryptu raz w miesiącu za pomocą `cron` (Linux/Raspberry Pi):
 
 ```bash
-python3 bdl_mirror.py --units-only --no-verify
+# Otwórz edytor cron
+crontab -e
+
+# Dodaj wpis aktualizujący dane 1-go dnia każdego miesiąca o 3:00 rano
+0 3 1 * * cd /sciezka/do/projektu && /usr/bin/python3 bdl_mirror.py --year-from $(date +\%Y)
 ```
 
-**Recommended Fix (better than --no-verify):**
-Update your system's certificate store:
-```bash
-sudo apt-get update
-sudo apt-get install --reinstall ca-certificates
-sudo update-ca-certificates
-```
+## Udostępnianie przez Cloudflare Tunnel
+
+Aby bezpiecznie wystawić BaDyLa do internetu bez otwierania portów na routerze, zaleca się użycie Cloudflare Tunnel.
+
+### Kroki konfiguracji:
+
+1.  **Zainstaluj cloudflared**:
+    Pobierz paczkę dla swojego systemu ze strony [Cloudflare](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/setup/).
+2.  **Zaloguj się**:
+    ```bash
+    cloudflared tunnel login
+    ```
+3.  **Utwórz tunel**:
+    ```bash
+    cloudflared tunnel create badyl-tunnel
+    ```
+4.  **Skonfiguruj routing**:
+    Przypisz tunel do swojej domeny (musisz mieć domenę w Cloudflare):
+    ```bash
+    cloudflared tunnel route dns badyl-tunnel badyl.twojadomena.pl
+    ```
+5.  **Uruchom tunel**:
+    Skieruj ruch na port Streamlit (8501):
+    ```bash
+    cloudflared tunnel run --url http://localhost:8501 badyl-tunnel
+    ```
+
+Dzięki temu Twoja lokalna instancja BaDyL będzie dostępna pod adresem `https://badyl.twojadomena.pl` z automatycznym certyfikatem SSL.
+
+## Uwagi dot. API GUS
+- Skrypt obsługuje rotację kluczy API (do 3 kluczy). Podaj je za pomocą `--api-keys KLUCZ1 KLUCZ2`.
+- W przypadku problemów z certyfikatami SSL na starszych systemach, użyj flagi `--no-verify`.

@@ -18,6 +18,27 @@
 ## Instalacja i Konfiguracja
 
 1.  Sklonuj repozytorium.
+
+## Aktualizacja z poprzednich wersji
+
+Jeśli masz już pobrane dane i skonfigurowaną bazę, nie musisz pobierać wszystkiego od nowa! Wykonaj te trzy kroki, aby włączyć nowe funkcje (wykresy, Word, masowy wybór):
+
+1.  **Aktualizacja bibliotek**:
+    ```bash
+    pip install -r requirements.txt
+    ```
+2.  **Migracja bazy**: Uruchom skrypt mirrora z dowolną flagą (np. pobieranie jednostek), aby automatycznie dodać nowe kolumny do bazy danych:
+    ```bash
+    python3 bdl_mirror.py --db-type postgres --pg-dsn "Twoj_DSN" --units-only
+    ```
+3.  **Odświeżenie nazw**: Uruchom skrypt etykiet, aby wgrać czytelne nazwy do GUI:
+    ```bash
+    python3 update_user_labels.py
+    ```
+
+## Instalacja i Konfiguracja (Nowa instalacja)
+
+1.  Sklonuj repozytorium.
 2.  Zainstaluj zależności:
     ```bash
     pip install -r requirements.txt
@@ -50,11 +71,20 @@ python3 update_user_labels.py
 
 ## Obsługa Interfejsu Graficznego (Streamlit)
 
-Za warstwę wizualną projektu odpowiada plik **`app.py`**. Aby go uruchomić:
+Za warstwę wizualną projektu odpowiada plik **`app.py`**. Został on zoptymalizowany pod kątem obsługi bardzo dużej liczby jednostek (np. wszystkich gmin w Polsce).
+
+**Kluczowe funkcje GUI:**
+- **Masowy wybór**: Możliwość dodania wszystkich gmin z konkretnego powiatu lub wszystkich gmin w całej Polsce jednym kliknięciem.
+- **Wydajność**: Przy dużej liczbie wybranych elementów interfejs automatycznie przechodzi w tryb skondensowany, co zapobiega spowolnieniu przeglądarki.
+- **Wizualizacja**: Automatyczne generowanie wykresów trendów czasowych dla wybranych danych.
+- **Eksport**: Możliwość pobrania danych do formatów CSV, Excel oraz Microsoft Word (.docx).
+- **Dynamiczne etykiety**: Nazwy wskaźników są pobierane bezpośrednio z bazy danych (uwzględniając `user_label`).
+
+Aby uruchomić:
 ```bash
 streamlit run app.py
 ```
-Po uruchomieniu interfejs będzie dostępny pod adresem `http://localhost:8501`.
+Interfejs będzie dostępny pod adresem `http://localhost:8501`.
 
 ## Automatyzacja (Aktualizacje raz w miesiącu)
 

@@ -4,6 +4,7 @@ import psycopg2
 import streamlit as st
 import plotly.express as px
 from docx import Document
+from docx.enum.section import WD_ORIENT
 from docx.shared import Inches
 
 DSN = "dbname=bdl_local user=bdl_user password=mocne_haslo host=localhost port=5432"
@@ -242,6 +243,14 @@ def to_excel(df):
 def to_word(df):
     output = io.BytesIO()
     doc = Document()
+
+    # Ustawienie orientacji poziomej
+    section = doc.sections[0]
+    new_width, new_height = section.page_height, section.page_width
+    section.orientation = WD_ORIENT.LANDSCAPE
+    section.page_width = new_width
+    section.page_height = new_height
+
     doc.add_heading('Eksport danych z BaDyL', 0)
 
     # Pivotujemy dane, aby lata były w kolumnach

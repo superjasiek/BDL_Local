@@ -2,30 +2,16 @@ import io
 import pandas as pd
 import psycopg2
 import streamlit as st
+import plotly.express as px
+from docx import Document
+from docx.shared import Inches
 
 DSN = "dbname=bdl_local user=bdl_user password=mocne_haslo host=localhost port=5432"
 
-VARIABLE_LABEL_OVERRIDES = {
-    #Edukacja
-    151867: "uczniowie - szkoły podstawowe",
-    455392: "uczniowie - szkoły ponadpodstawowe ogólnokształcące",
-    455403: "uczniowie - technika",
-    569055: "uczniowie - szkoły brnażowe",
-    # Rynek pracy
-    10514: "bezrobotni - ogółem",
-    10515: "bezrobotni - kobiety",
-    33484: "bezrobotni - mężczyźni",
-    79214: "udział bezrobotnych w liczbie osób w wieku produkcyjnym",
-    1650726: "pracujący - ogółem",
-    1650727: "pracujący - mężczyźni",
-    1650728: "pracujący - kobiety",
-    # Ludność
-    72305: "Liczba ludności ogółem",
-}
-
 def display_variable_name(row):
-    var_id = int(row["id"])
-    return VARIABLE_LABEL_OVERRIDES.get(var_id, row["name"])
+    # Etykiety pobierane są dynamicznie z bazy (user_label),
+    # co eliminuje potrzebę utrzymywania słownika w kodzie.
+    return row.get("name")
 
 st.set_page_config(page_title="BaDyL - Lokalny BDL", layout="wide")
 
@@ -46,6 +32,22 @@ def get_categories():
 
 
 @st.cache_data(ttl=300)
+def get_all_gminy():
+    conn = get_conn()
+    return pd.read_sql("""
+        SELECT
+            g.id,
+            g.name,
+            g.level,
+            g.parentid,
+            p.name AS powiat_name
+        FROM units g
+        LEFT JOIN units p ON p.id = g.parentid AND p.level = 5
+        WHERE g.level = 6
+        ORDER BY g.name
+    """, conn)
+
+@st.cache_data(ttl=300)
 def search_units(q):
     conn = get_conn()
     return pd.read_sql("""
@@ -62,7 +64,7 @@ def search_units(q):
         WHERE u.name ILIKE %(q)s
            OR u.id ILIKE %(q)s
         ORDER BY u.level, u.name, u.id
-        LIMIT 200
+        LIMIT 500
     """, conn, params={"q": f"%{q}%"})
 
 @st.cache_data(ttl=300)
@@ -200,10 +202,6 @@ def search_variables_all(q):
         ORDER BY category, COALESCE(user_label, display_name, subject_name || ' - ' || name, name)
         LIMIT 300
     """, conn, params={"q": f"%{q}%"})
-    if global_indicator_search.strip():
-        vars_df_visible = search_variables_all(global_indicator_search.strip())
-        st.caption(f"Wyniki wyszukiwania ze wszystkich kategorii: {len(vars_df_visible)}")
-        st.dataframe(vars_df_visible.head(20))  # tymczasowo do testu
 
 
 
@@ -241,17 +239,41 @@ def to_excel(df):
     return output.getvalue()
 
 
+def to_word(df):
+    output = io.BytesIO()
+    doc = Document()
+    doc.add_heading('Eksport danych z BaDyL', 0)
+
+    # Dodajemy tabelę
+    t = doc.add_table(rows=1, cols=len(df.columns))
+    t.style = 'Table Grid'
+
+    # Nagłówki
+    for i, column in enumerate(df.columns):
+        t.cell(0, i).text = str(column)
+
+    # Dane
+    for _, row in df.iterrows():
+        row_cells = t.add_row().cells
+        for i, value in enumerate(row):
+            row_cells[i].text = str(value)
+
+    doc.save(output)
+    return output.getvalue()
+
+
 if "selected_units_dict" not in st.session_state:
     st.session_state.selected_units_dict = {}
 
-st.title("BaDyL - Lokalny BDL")
+st.title("🎋 BaDyL - Lokalny Mirror BDL")
 
-left, middle, right = st.columns([1.1, 1.3, 2.2])
+left, middle, right = st.columns([1.1, 1.2, 2.2])
 
 with left:
-    st.header("Jednostki terytorialne")
+    with st.container(border=True):
+        st.header("🌍 Jednostki")
 
-    tab_tree, tab_search = st.tabs(["Drzewo JST", "Szukaj"])
+        tab_tree, tab_search = st.tabs(["🌳 Drzewo", "🔍 Szukaj"])
 
     with tab_search:
         unit_query = st.text_input(
@@ -266,7 +288,19 @@ with left:
             if units_df.empty:
                 st.info("Brak wyników.")
             else:
-                for idx, row in units_df.iterrows():
+                if st.button("Dodaj wszystkie wyniki wyszukiwania", type="secondary"):
+                    for _, row in units_df.iterrows():
+                        powiat = row.get("powiat_name")
+                        if row["level"] == 6 and pd.notna(powiat):
+                            add_unit(row["id"], f"{row['name']} | {powiat}", row["level"])
+                        else:
+                            add_unit(row["id"], row["name"], row["level"])
+                    st.rerun()
+
+                st.divider()
+
+                # Ograniczamy listę widoczną do 50, żeby nie spowalniać Streamlit
+                for idx, row in units_df.head(50).iterrows():
                     col_a, col_b = st.columns([4, 1])
                     powiat = row.get("powiat_name")
 
@@ -285,21 +319,32 @@ with left:
                             else:
                                 add_unit(row["id"], row["name"], row["level"])
                             st.rerun()
+                if len(units_df) > 50:
+                    st.caption(f"...i {len(units_df)-50} innych wyników. Użyj przycisku na górze, aby dodać wszystkie.")
 
     with tab_tree:
         polska_df = get_units_by_parent(None)
         polska_rows = polska_df[polska_df["level"] == 0]
 
-        if not polska_rows.empty:
-            polska = polska_rows.iloc[0]
-            if st.checkbox(
-                f"{polska['name']} | {polska['id']}",
-                key=f"tree_polska_{polska['id']}",
-                value=str(polska["id"]) in st.session_state.selected_units_dict
-            ):
-                add_unit(polska["id"], polska["name"], polska["level"])
-            else:
-                remove_unit(polska["id"])
+        col_pol, col_all_gminy = st.columns([1, 1])
+        with col_pol:
+            if not polska_rows.empty:
+                polska = polska_rows.iloc[0]
+                if st.checkbox(
+                    f"{polska['name']} | {polska['id']}",
+                    key=f"tree_polska_{polska['id']}",
+                    value=str(polska["id"]) in st.session_state.selected_units_dict
+                ):
+                    add_unit(polska["id"], polska["name"], polska["level"])
+                else:
+                    remove_unit(polska["id"])
+
+        with col_all_gminy:
+            if st.button("Dodaj WSZYSTKIE gminy w Polsce"):
+                all_gminy = get_all_gminy()
+                for _, g in all_gminy.iterrows():
+                    add_unit(g["id"], f"{g['name']} | {g['powiat_name']}", g["level"])
+                st.rerun()
 
         wojewodztwa = get_wojewodztwa()
 
@@ -376,41 +421,50 @@ with left:
                             )
                         st.rerun()
 
-    st.subheader("Wybrane jednostki")
+                if not gminy.empty:
+                    if st.button("Dodaj WSZYSTKIE gminy z tych powiatów"):
+                        for _, g in gminy.iterrows():
+                            add_unit(g["id"], f"{g['name']} | {g['powiat_name']}", g["level"])
+                        st.rerun()
 
-    if not st.session_state.selected_units_dict:
-        st.info("Nie wybrano żadnych jednostek.")
-    else:
-        col_clear, col_info = st.columns([1, 3])
+    with st.container(border=True):
+        st.subheader("📍 Wybrane jednostki")
 
-        with col_clear:
-            if st.button("Usuń wszystko", type="secondary"):
+        num_units = len(st.session_state.selected_units_dict)
+        st.metric("Liczba JST", num_units)
+
+        if not st.session_state.selected_units_dict:
+            st.info("Wybierz jednostki z powyższego menu.")
+        else:
+            if st.button("Usuń wszystkie jednostki", key="clear_units_btn", use_container_width=True):
                 clear_units()
                 st.rerun()
 
-        with col_info:
-            st.caption(f"Liczba wybranych jednostek: {len(st.session_state.selected_units_dict)}")
-
-        for unit_id, unit in list(st.session_state.selected_units_dict.items()):
-            col_a, col_b = st.columns([4, 1])
-
-            with col_a:
-                st.write(f"{unit['name']} | level {unit['level']} | {unit_id}")
-
-            with col_b:
-                if st.button("Usuń", key=f"remove_{unit_id}"):
-                    remove_unit(unit_id)
-                    st.rerun()
+            # Optymalizacja: jeśli jest dużo jednostek, nie pokazujemy przycisków usuwania dla każdej
+            if num_units > 20:
+                with st.expander(f"Pokaż listę ({num_units})"):
+                    for unit_id, unit in st.session_state.selected_units_dict.items():
+                        st.write(f"- {unit['name']} (`{unit_id}`)")
+            else:
+                for unit_id, unit in list(st.session_state.selected_units_dict.items()):
+                    col_a, col_b = st.columns([5, 1])
+                    with col_a:
+                        st.caption(f"{unit['name']}")
+                    with col_b:
+                        if st.button("❌", key=f"remove_{unit_id}", help=f"Usuń {unit_id}"):
+                            remove_unit(unit_id)
+                            st.rerun()
 
     selected_units = list(st.session_state.selected_units_dict.keys())
 with middle:
-    st.header("Wskaźniki")
+    with st.container(border=True):
+        st.header("📊 Wskaźniki")
 
-    if "selected_variables_dict" not in st.session_state:
-        st.session_state.selected_variables_dict = {}
+        if "selected_variables_dict" not in st.session_state:
+            st.session_state.selected_variables_dict = {}
 
-    categories = get_categories()
-    selected_category = st.selectbox("Kategoria", categories)
+        categories = get_categories()
+        selected_category = st.selectbox("📂 Kategoria", categories)
 
     global_indicator_search = st.text_input(
         "Filtruj wskaźniki we wszystkich kategoriach",
@@ -467,50 +521,48 @@ with middle:
                 add_variable(row["id"], row["name"], row["category"], row["measureunitname"])
             st.rerun()
 
-    st.subheader("Wybrane wskaźniki")
+    with st.container(border=True):
+        st.subheader("📈 Wybrane wskaźniki")
+        num_vars = len(st.session_state.selected_variables_dict)
+        st.metric("Liczba wskaźników", num_vars)
 
-    if not st.session_state.selected_variables_dict:
-        st.info("Nie wybrano żadnych wskaźników.")
-    else:
-        col_clear_vars, col_count_vars = st.columns([1, 3])
-
-        with col_clear_vars:
-            if st.button("Usuń wszystkie wskaźniki", type="secondary"):
+        if not st.session_state.selected_variables_dict:
+            st.info("Wyszukaj i dodaj wskaźniki z listy powyżej.")
+        else:
+            if st.button("Usuń wszystkie wskaźniki", key="clear_vars_btn", use_container_width=True):
                 st.session_state.selected_variables_dict = {}
                 st.rerun()
 
-        with col_count_vars:
-            st.caption(f"Liczba wybranych wskaźników: {len(st.session_state.selected_variables_dict)}")
-
-        for var_id, var in list(st.session_state.selected_variables_dict.items()):
-            col_a, col_b = st.columns([4, 1])
-
-            with col_a:
-                st.write(
-                    f"{var['name']} | {var['category']} | {var_id} | {var['measureunitname']}"
-                )
-
-            with col_b:
-                if st.button("Usuń", key=f"remove_var_{var_id}"):
-                    remove_variable(var_id)
-                    st.rerun()
+            if num_vars > 20:
+                with st.expander(f"Pokaż listę ({num_vars})"):
+                    for var_id, var in st.session_state.selected_variables_dict.items():
+                        st.write(f"- {var['name']} (`{var_id}`)")
+            else:
+                for var_id, var in list(st.session_state.selected_variables_dict.items()):
+                    col_a, col_b = st.columns([5, 1])
+                    with col_a:
+                        st.caption(f"{var['name']}")
+                    with col_b:
+                        if st.button("❌", key=f"remove_var_{var_id}", help=f"Usuń {var_id}"):
+                            remove_variable(var_id)
+                            st.rerun()
 
     selected_vars = list(st.session_state.selected_variables_dict.keys())
 
-    st.header("Lata")
-    year_from, year_to = st.slider(
-        "Zakres lat",
-        min_value=2014,
-        max_value=2025,
-        value=(2014, 2025)
-    )
+    with st.container(border=True):
+        st.header("📅 Okres")
+        year_from, year_to = st.slider(
+            "Zakres lat",
+            min_value=2014,
+            max_value=2025,
+            value=(2014, 2025)
+        )
+        years = list(range(year_from, year_to + 1))
 
-    years = list(range(year_from, year_to + 1))
-
-    load = st.button("Pobierz dane", type="primary")
+    load = st.button("🚀 POBIERZ DANE", type="primary", use_container_width=True)
 
 with right:
-    st.header("Wyniki")
+    st.header("📋 Wyniki")
 
     if load:
         if not selected_units:
@@ -523,20 +575,48 @@ with right:
             if df.empty:
                 st.info("Brak danych dla wybranego zestawu.")
             else:
-                st.dataframe(df, use_container_width=True, height=500)
+                tab_table, tab_charts = st.tabs(["📄 Tabela", "📈 Wykresy"])
 
-                csv = df.to_csv(index=False, sep=";", encoding="utf-8-sig")
+                with tab_table:
+                    st.dataframe(df, use_container_width=True, height=500)
 
-                st.download_button(
-                    "Pobierz CSV",
-                    data=csv,
-                    file_name="bdl_export.csv",
-                    mime="text/csv"
-                )
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        csv = df.to_csv(index=False, sep=";", encoding="utf-8-sig")
+                        st.download_button(
+                            "📥 Pobierz CSV",
+                            data=csv,
+                            file_name="bdl_export.csv",
+                            mime="text/csv",
+                            use_container_width=True
+                        )
+                    with col2:
+                        st.download_button(
+                            "📥 Pobierz Excel",
+                            data=to_excel(df),
+                            file_name="bdl_export.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
+                    with col3:
+                        st.download_button(
+                            "📥 Pobierz Word",
+                            data=to_word(df),
+                            file_name="bdl_export.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True
+                        )
 
-                st.download_button(
-                    "Pobierz Excel",
-                    data=to_excel(df),
-                    file_name="bdl_export.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                with tab_charts:
+                    chart_vars = df["variable_name"].unique()
+                    for var in chart_vars:
+                        subset = df[df["variable_name"] == var]
+                        fig = px.line(
+                            subset,
+                            x="year",
+                            y="value",
+                            color="unit_name",
+                            title=f"Trend: {var}",
+                            markers=True
+                        )
+                        st.plotly_chart(fig, use_container_width=True)

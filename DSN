@@ -1,0 +1,10 @@
+cd ~/bdl
+source venv/bin/activate
+
+DSN="dbname=bdl_local user=user password=haslo host=localhost port=5432"
+
+python3 bdl_mirror.py \
+  --db-type postgres \
+  --pg-dsn "$DSN" \
+  --refresh-metadata \
+  --no-verify

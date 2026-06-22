@@ -342,7 +342,8 @@ class Database:
                             name TEXT,
                             category TEXT,
                             measureUnitName TEXT,
-                            lastUpdate TEXT
+                            lastUpdate TEXT,
+                            user_label TEXT
                         )''')
             c.execute('''CREATE TABLE IF NOT EXISTS data (
                             unit_id TEXT,
@@ -356,9 +357,12 @@ class Database:
                         )''')
 
             c.execute("CREATE INDEX IF NOT EXISTS idx_units_name ON units(name)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_units_level ON units(level)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_units_parent ON units(parentId)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_variables_category ON variables(category)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_data_variable ON data(variable_id)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_data_unit ON data(unit_id)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_data_year ON data(year)")
 
             c.execute('''CREATE VIEW IF NOT EXISTS view_full_data AS
                          SELECT
@@ -385,7 +389,8 @@ class Database:
                             name TEXT,
                             category TEXT,
                             measureUnitName TEXT,
-                            lastUpdate TEXT
+                            lastUpdate TEXT,
+                            user_label TEXT
                         )''')
             c.execute('''CREATE TABLE IF NOT EXISTS data (
                             unit_id TEXT REFERENCES units(id),
@@ -397,9 +402,12 @@ class Database:
                         )''')
 
             c.execute("CREATE INDEX IF NOT EXISTS idx_units_name ON units(name)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_units_level ON units(level)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_units_parent ON units(parentId)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_variables_category ON variables(category)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_data_variable ON data(variable_id)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_data_unit ON data(unit_id)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_data_year ON data(year)")
 
             c.execute('''CREATE OR REPLACE VIEW view_full_data AS
                          SELECT
@@ -414,6 +422,21 @@ class Database:
                          FROM data d
                          JOIN units u ON d.unit_id = u.id
                          JOIN variables v ON d.variable_id = v.id''')
+
+        # Migration: Ensure user_label column exists for existing databases
+        try:
+            if self.db_type == "sqlite":
+                # Check if column exists in SQLite
+                c.execute("PRAGMA table_info(variables)")
+                columns = [info[1] for info in c.fetchall()]
+                if "user_label" not in columns:
+                    c.execute("ALTER TABLE variables ADD COLUMN user_label TEXT")
+            else:
+                # PostgreSQL
+                c.execute("ALTER TABLE variables ADD COLUMN IF NOT EXISTS user_label TEXT")
+        except Exception as e:
+            print(f"Migration notice (user_label): {e}")
+
         self.commit()
 
 def api_get(endpoint, params=None, retries_in_round=0):
@@ -489,7 +512,9 @@ def fetch_variable_metadata(var_id):
 def save_variable(db, var_id, name, category, measureUnitName, lastUpdate=None):
     c = db.cursor()
     if db.db_type == "sqlite":
-        c.execute("INSERT OR REPLACE INTO variables (id, name, category, measureUnitName, lastUpdate) VALUES (?, ?, ?, ?, ?)",
+        c.execute('''INSERT INTO variables (id, name, category, measureUnitName, lastUpdate) VALUES (?, ?, ?, ?, ?)
+                     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, category = EXCLUDED.category,
+                     measureUnitName = EXCLUDED.measureUnitName, lastUpdate = EXCLUDED.lastUpdate''',
                   (var_id, name, category, measureUnitName, lastUpdate))
     else:
         c.execute('''INSERT INTO variables (id, name, category, measureUnitName, lastUpdate) VALUES (%s, %s, %s, %s, %s)

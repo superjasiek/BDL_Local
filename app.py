@@ -244,19 +244,55 @@ def to_word(df):
     doc = Document()
     doc.add_heading('Eksport danych z BaDyL', 0)
 
+    # Pivotujemy dane, aby lata były w kolumnach
+    pivot_df = df.pivot_table(
+        index=['unit_name', 'variable_name', 'category'],
+        columns='year',
+        values='value'
+    ).reset_index()
+    pivot_df.columns.name = None
+
+    # Pobieramy kolumny lat (liczbowe) i sortujemy je
+    years_cols = sorted([c for c in pivot_df.columns if isinstance(c, (int, float))])
+
+    # Obliczamy zmianę procentową między ostatnim a pierwszym rokiem
+    if len(years_cols) >= 2:
+        first_year = years_cols[0]
+        last_year = years_cols[-1]
+        pivot_df['Zmiana [%]'] = pivot_df.apply(
+            lambda row: ((row[last_year] - row[first_year]) / row[first_year] * 100)
+            if row[first_year] != 0 and pd.notna(row[first_year]) and pd.notna(row[last_year])
+            else None,
+            axis=1
+        )
+    else:
+        pivot_df['Zmiana [%]'] = None
+
     # Dodajemy tabelę
-    t = doc.add_table(rows=1, cols=len(df.columns))
+    t = doc.add_table(rows=1, cols=len(pivot_df.columns))
     t.style = 'Table Grid'
 
     # Nagłówki
-    for i, column in enumerate(df.columns):
-        t.cell(0, i).text = str(column)
+    for i, col in enumerate(pivot_df.columns):
+        if i < 3:
+            # Pierwsze trzy kolumny (jednostka, wskaźnik, kategoria) mają puste nagłówki wg wzoru
+            t.cell(0, i).text = ""
+        elif isinstance(col, (int, float)):
+            t.cell(0, i).text = str(int(col))
+        else:
+            t.cell(0, i).text = str(col)
 
     # Dane
-    for _, row in df.iterrows():
+    for _, row in pivot_df.iterrows():
         row_cells = t.add_row().cells
         for i, value in enumerate(row):
-            row_cells[i].text = str(value)
+            if pd.isna(value):
+                row_cells[i].text = ""
+            elif isinstance(value, (float, int)) and i >= 3:
+                # Formatowanie liczb z przecinkiem jako separatorem dziesiętnym
+                row_cells[i].text = f"{value:.2f}".replace('.', ',')
+            else:
+                row_cells[i].text = str(value)
 
     doc.save(output)
     return output.getvalue()

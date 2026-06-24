@@ -255,16 +255,21 @@ def to_word(df):
 
     # Pivotujemy dane, aby lata były w kolumnach
     pivot_df = df.pivot_table(
-        index=['unit_name', 'variable_name', 'category'],
+        index=['variable_name', 'unit_id', 'unit_name'],
         columns='year',
-        values='value'
+        values='value',
+        sort=False # Zachowujemy kolejność z df jeśli to możliwe, ale dla bezpieczeństwa posortujemy później
     ).reset_index()
     pivot_df.columns.name = None
+
+    # Sortowanie po unit_id zapewnia hierarchię: Polska (00...), Woj (02...), Powiat (0201...), Gmina (020101...)
+    # Najpierw zmienna, potem unit_id
+    pivot_df = pivot_df.sort_values(['variable_name', 'unit_id'])
 
     # Pobieramy kolumny lat (liczbowe) i sortujemy je
     years_cols = sorted([c for c in pivot_df.columns if isinstance(c, (int, float))])
 
-    # Obliczamy zmianę procentową między ostatnim a pierwszym rokiem
+    # Obliczamy zmianę procentową
     if len(years_cols) >= 2:
         first_year = years_cols[0]
         last_year = years_cols[-1]
@@ -277,31 +282,39 @@ def to_word(df):
     else:
         pivot_df['Zmiana [%]'] = None
 
+    # Tworzymy listę kolumn do wyświetlenia: Jednostka, Lata..., Zmiana
+    display_cols = ['unit_name'] + years_cols + ['Zmiana [%]']
+    num_cols = len(display_cols)
+
     # Dodajemy tabelę
-    t = doc.add_table(rows=1, cols=len(pivot_df.columns))
+    t = doc.add_table(rows=1, cols=num_cols)
     t.style = 'Table Grid'
 
-    # Nagłówki
-    for i, col in enumerate(pivot_df.columns):
-        if i < 3:
-            # Pierwsze trzy kolumny (jednostka, wskaźnik, kategoria) mają puste nagłówki wg wzoru
-            t.cell(0, i).text = ""
-        elif isinstance(col, (int, float)):
-            t.cell(0, i).text = str(int(col))
-        else:
-            t.cell(0, i).text = str(col)
+    # Nagłówki (Pierwszy wiersz)
+    header_cells = t.rows[0].cells
+    header_cells[0].text = "" # Puste nad nazwą jednostki
+    for i, col in enumerate(years_cols + ['Zmiana [%]']):
+        header_cells[i+1].text = str(col) if not isinstance(col, (int, float)) else str(int(col))
 
-    # Dane
-    for _, row in pivot_df.iterrows():
-        row_cells = t.add_row().cells
-        for i, value in enumerate(row):
-            if pd.isna(value):
-                row_cells[i].text = ""
-            elif isinstance(value, (float, int)) and i >= 3:
-                # Formatowanie liczb z przecinkiem jako separatorem dziesiętnym
-                row_cells[i].text = f"{value:.2f}".replace('.', ',')
-            else:
-                row_cells[i].text = str(value)
+    # Grupowanie po wskaźniku
+    for var_name, group in pivot_df.groupby('variable_name', sort=False):
+        # Dodajemy wiersz z nazwą wskaźnika i scalamy go
+        row = t.add_row()
+        row.cells[0].merge(row.cells[num_cols-1])
+        row.cells[0].text = str(var_name)
+
+        # Dodajemy dane dla tego wskaźnika
+        for _, data_row in group.iterrows():
+            cells = t.add_row().cells
+            # Jednostka
+            cells[0].text = str(data_row['unit_name'])
+            # Wartości i zmiana
+            for i, col in enumerate(years_cols + ['Zmiana [%]']):
+                val = data_row[col]
+                if pd.isna(val):
+                    cells[i+1].text = ""
+                else:
+                    cells[i+1].text = f"{val:.2f}".replace('.', ',')
 
     doc.save(output)
     return output.getvalue()
